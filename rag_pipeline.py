@@ -78,6 +78,22 @@ class Pipeline:
 
         try:
             # Realizar la solicitud POST
+            yield json.dumps({
+                "type": "status",
+                "status": "processing",
+                "message": "🔍 Buscando datos en fuentes externas..."
+            })
+
+            # Simular tiempo de búsqueda
+            time.sleep(0.5)
+
+            # Actualizar estado
+            yield json.dumps({
+                "type": "status",
+                "status": "processing",
+                "message": "📂 Cargando y procesando documentos..."
+            })
+
             response = requests.post(
                 f"{self.valves.API_URL}/chat_history/ask_question2/",
                 files={key: (None, value) for key, value in form_data.items()},
