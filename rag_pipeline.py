@@ -4,6 +4,7 @@ import requests
 import os
 import json
 import uuid
+import traceback
 
 class Pipeline:
     class Valves(BaseModel):
@@ -87,6 +88,6 @@ class Pipeline:
             return str(response.text)
             
         except requests.exceptions.RequestException as e:
-            return f"Error en la solicitud: {str(e)}"
+            return f"Error en la solicitud: {str(traceback.print_exc())}"
         except Exception as e:
-            return f"Error interno: {str(e)}"
+            return f"Error interno: {str(traceback.print_exc())}"
