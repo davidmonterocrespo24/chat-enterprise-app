@@ -71,7 +71,7 @@ class Pipeline:
         form_data = {
             'chat_message': json.dumps(chat_message),
             'chat_history_id': str(body.get("chat_history_id", 0)),
-            'chat_history_message': json.dumps(messages or []),
+            'chat_history_message': json.dumps([]),
             'configuration': json.dumps(configuration)
         }
 
