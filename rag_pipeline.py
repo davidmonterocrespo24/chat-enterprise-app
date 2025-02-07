@@ -81,11 +81,14 @@ class Pipeline:
             response = requests.post(
                 f"{self.valves.API_URL}/chat_history/ask_question2/",
                 files={key: (None, value) for key, value in form_data.items()},
-                headers=headers
+                headers=headers,
+                  stream=True
             )
             response.raise_for_status()
             
-            return str(response.text)
+            for chunk in response.iter_content(chunk_size=None):
+                if chunk:
+                    yield chunk.decode('utf-8')
             
         except requests.exceptions.RequestException as e:
             return f"Error en la solicitud: {str(traceback.print_exc())}"
