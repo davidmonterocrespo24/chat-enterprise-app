@@ -84,6 +84,7 @@ class Pipeline:
             )
             response.raise_for_status()
             
+            print(response.json())
             return response.json()
             
         except requests.exceptions.RequestException as e:
