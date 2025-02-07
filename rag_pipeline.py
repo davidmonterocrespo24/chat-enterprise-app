@@ -40,7 +40,13 @@ class Pipeline:
         body: dict
     ) -> Union[str, Generator, Iterator]:
         
-        # Preparar los headers
+        print(f"user_message: {user_message}")
+        print(f"model_id: {model_id}")
+        print(f"messages: {messages}")
+        print(f"body: {body}")
+        
+        # Aquí podrías tener la lógica de la función
+        result = f"Processing message '{user_message}' with model '{model_id}'"
         headers = {
             "accept": "application/json",
             "authorization": f"Bearer {self.valves.API_TOKEN}",
