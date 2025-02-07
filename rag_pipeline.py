@@ -1,10 +1,11 @@
-from typing import List, Union, Generator, Iterator
+from typing import List, Union, Generator, Iterator, Optional, Callable, Awaitable, Any
 from pydantic import BaseModel
 import requests
 import os
 import json
 import uuid
 import traceback
+from fastapi import Request
 
 class Pipeline:
     class Valves(BaseModel):
@@ -26,87 +27,102 @@ class Pipeline:
                 "DEFAULT_USER_ID": os.getenv("DEFAULT_USER_ID", "user_0"),
             }
         )
-
+        
     async def on_startup(self):
         print(f"{self.name} iniciado")
-
+        
     async def on_shutdown(self):
         print(f"{self.name} detenido")
+        
+    async def set_status(self, description: str, __event_emitter__: Optional[Callable[[Any], Awaitable[None]]] = None):
+        if __event_emitter__:
+            await __event_emitter__({"type": "status", "data": {"description": description, "done": False}})
 
-    def pipe(
+    async def send_data(self, data: str, role: str = "assistant", __event_emitter__: Optional[Callable[[Any], Awaitable[None]]] = None):
+        if __event_emitter__:
+            await __event_emitter__({"type": "message", "data": {"content": data, "role": role}})
+            
+    async def set_status_end(self, data: str, __event_emitter__: Optional[Callable[[Any], Awaitable[None]]] = None):
+        if __event_emitter__:
+            await __event_emitter__({"type": "status", "data": {"description": data, "done": True}})
+
+    async def pipe(
         self,
-        user_message: str,
-        model_id: str,
-        messages: List[dict],
-        body: dict
-    ) -> Union[str, Generator, Iterator]:
-        
-        print(f"user_message: {user_message}")
-        print(f"model_id: {model_id}")
-        print(f"messages: {messages}")
-        print(f"body: {body}")
-        
-        # Aquí podrías tener la lógica de la función
-        result = f"Processing message '{user_message}' with model '{model_id}'"
-        headers = {
-            "accept": "application/json",
-            "authorization": f"Bearer {self.valves.API_TOKEN}",
-           
-        }
-
-        # Preparar el mensaje
-        chat_message = {
-            "message": user_message,
-            "sender": "user",
-            "id": 0
-        }
-
-        # Configuración
-        configuration = {
-            "model": model_id or self.valves.DEFAULT_MODEL,
-            "internet_access": True,
-            "document_access": True
-        }
-
-        # Crear el form data
-        form_data = {
-            'chat_message': json.dumps(chat_message),
-            'chat_history_id': str(body.get("chat_history_id", 0)),
-            'chat_history_message': json.dumps([]),
-            'configuration': json.dumps(configuration)
-        }
-
+        body: dict,
+        __user__: dict,
+        __event_emitter__: Optional[Callable[[Any], Awaitable[None]]],
+        __request__: Request,
+        __task__=None,
+    ) -> str:
         try:
-            # Realizar la solicitud POST
-            yield json.dumps({
-                "type": "status",
-                "status": "processing",
-                "message": "🔍 Buscando datos en fuentes externas..."
-            })
-
-            # Simular tiempo de búsqueda
-            time.sleep(0.5)
-
-            # Actualizar estado
-            yield json.dumps({
-                "type": "status",
-                "status": "processing",
-                "message": "📂 Cargando y procesando documentos..."
-            })
-
+            # Extract necessary information
+            user_message = body.get("messages", [{}])[-1].get("content", "")
+            model_id = body.get("model", self.valves.DEFAULT_MODEL)
+            
+            # Notify start of processing
+            await self.set_status("Initializing pipeline...", __event_emitter__)
+            
+            # Prepare headers and message
+            headers = {
+                "accept": "application/json",
+                "authorization": f"Bearer {self.valves.API_TOKEN}",
+            }
+            
+            # Notify message preparation
+            await self.set_status("Preparing message for processing...", __event_emitter__)
+            
+            chat_message = {
+                "message": user_message,
+                "sender": "user",
+                "id": 0
+            }
+            
+            configuration = {
+                "model": model_id,
+                "internet_access": True,
+                "document_access": True
+            }
+            
+            form_data = {
+                'chat_message': json.dumps(chat_message),
+                'chat_history_id': str(body.get("chat_history_id", 0)),
+                'chat_history_message': json.dumps([]),
+                'configuration': json.dumps(configuration)
+            }
+            
+            # Notify API request start
+            await self.set_status("Sending request to API...", __event_emitter__)
+            
             response = requests.post(
                 f"{self.valves.API_URL}/chat_history/ask_question2/",
                 files={key: (None, value) for key, value in form_data.items()},
                 headers=headers,
-                  stream=True
+                stream=True
             )
             response.raise_for_status()
             
+            # Notify streaming start
+            await self.set_status("Processing response stream...", __event_emitter__)
+            
+            accumulated_response = ""
             for chunk in response.iter_content(chunk_size=None):
                 if chunk:
-                    yield chunk.decode('utf-8')
+                    chunk_text = chunk.decode('utf-8')
+                    accumulated_response += chunk_text
+                    # Send chunk to user
+                    await self.send_data(chunk_text, "assistant", __event_emitter__)
+            
+            # Notify completion
+            await self.set_status_end(f"Pipeline completed successfully - Processed {len(accumulated_response)} characters", __event_emitter__)
+            
+            return ""
             
         except requests.exceptions.RequestException as e:
-            return f"Error en la solicitud: {str(traceback.print_exc())}"
+            error_msg = f"API Request Error: {str(e)}"
+            await self.set_status_end(error_msg, __event_emitter__)
+            return error_msg
+            
         except Exception as e:
-            return f"Error interno: {str(traceback.print_exc())}"
+            error_msg = f"Internal Error: {str(e)}\n{traceback.format_exc()}"
+            await self.set_status_end(error_msg, __event_emitter__)
+            return error_msg
