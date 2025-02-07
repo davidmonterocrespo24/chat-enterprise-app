@@ -84,8 +84,7 @@ class Pipeline:
             )
             response.raise_for_status()
             
-            print(response.json())
-            return response.json()
+            return str(response)
             
         except requests.exceptions.RequestException as e:
             return f"Error en la solicitud: {str(e)}"
