@@ -1,10 +1,11 @@
+from typing import List, Union, Generator, Iterator
+from pydantic import BaseModel
+import requests
 import os
 import json
+import uuid
 import traceback
-from typing import List, AsyncGenerator
-from pydantic import BaseModel
-import httpx
-import asyncio
+import time  # Se importa time para poder pausar la ejecución
 
 class Pipeline:
     class Valves(BaseModel):
@@ -33,52 +34,45 @@ class Pipeline:
     async def on_shutdown(self):
         print(f"{self.name} detenido")
 
-    async def pipe(
+    def pipe(
         self,
         user_message: str,
         model_id: str,
         messages: List[dict],
-        body: dict,
-    ) -> AsyncGenerator[str, None]:
-        """
-        Realiza la conexión con el servicio externo y retorna un stream de respuesta que
-        incluye mensajes intermedios de estado (en formato SSE) y los datos finales.
+        body: dict
+    ) -> Union[str, Generator, Iterator]:
+        
+        print(f"user_message: {user_message}")
+        print(f"model_id: {model_id}")
+        print(f"messages: {messages}")
+        print(f"body: {body}")
 
-        El stream incluye:
-          - Mensajes de estado formateados como SSE: 'data: {json}\n\n'
-          - Los chunks de respuesta del servicio.
+        # Mostrar notificación de "pensando" antes de llamar a la API
+        yield "<think>Pensando... Por favor, espera 2 segundos mientras procesamos tu solicitud.</think>"
+        time.sleep(2)  # Pausa de 2 segundos
 
-        Nota: Esta solución inyecta los mensajes de estado en el mismo stream de datos.
-        El cliente deberá procesarlos para separarlos de los datos "puros".
-        """
-        # Función auxiliar para generar un mensaje SSE con estado
-        def sse_status(description: str, done: bool) -> str:
-            status_msg = {
-                "type": "status",
-                "data": {"description": description, "done": done}
-            }
-            # Se retorna el mensaje en formato SSE
-            return f"data: {json.dumps(status_msg)}\n\n"
-
-        # 1. Notificar inicio de conexión
-        yield sse_status("Iniciando conexión al servicio externo...", done=False)
-
+        # Aquí podrías tener la lógica de la función
+        result = f"Processing message '{user_message}' with model '{model_id}'"
         headers = {
             "accept": "application/json",
             "authorization": f"Bearer {self.valves.API_TOKEN}",
         }
 
-        # Preparar el mensaje y la configuración
+        # Preparar el mensaje
         chat_message = {
             "message": user_message,
             "sender": "user",
             "id": 0
         }
+
+        # Configuración
         configuration = {
             "model": model_id or self.valves.DEFAULT_MODEL,
             "internet_access": True,
             "document_access": True
         }
+
+        # Crear el form data
         form_data = {
             'chat_message': json.dumps(chat_message),
             'chat_history_id': str(body.get("chat_history_id", 0)),
@@ -87,35 +81,20 @@ class Pipeline:
         }
 
         try:
-            # 2. Notificar envío de la solicitud
-            yield sse_status("Enviando solicitud al servicio externo...", done=False)
-
-            # Realizamos la solicitud de forma asíncrona con httpx
-            async with httpx.AsyncClient(timeout=None) as client:
-                response = await client.post(
-                    f"{self.valves.API_URL}/chat_history/ask_question2/",
-                    files={key: (None, value) for key, value in form_data.items()},
-                    headers=headers,
-                )
-                response.raise_for_status()
-
-                # 3. Notificar recepción de la respuesta y comienzo del streaming
-                yield sse_status("Respuesta recibida. Procesando datos...", done=False)
-
-                # 4. Iterar sobre los chunks de respuesta
-                async for chunk in response.aiter_text():
-                    if chunk:
-                        # Se envía el chunk "crudo" sin formatear (se asume que es parte del output final)
-                        yield chunk
-
-            # 5. Notificar que el proceso ha finalizado correctamente
-            yield sse_status("Proceso completado", done=True)
-
-        except httpx.RequestError as e:
-            error_msg = f"Error en la solicitud: {str(e)}"
-            print(traceback.format_exc())
-            yield sse_status(error_msg, done=True)
+            # Realizar la solicitud POST a la API
+            response = requests.post(
+                f"{self.valves.API_URL}/chat_history/ask_question2/",
+                files={key: (None, value) for key, value in form_data.items()},
+                headers=headers,
+                stream=True
+            )
+            response.raise_for_status()
+            
+            for chunk in response.iter_content(chunk_size=None):
+                if chunk:
+                    yield chunk.decode('utf-8')
+            
+        except requests.exceptions.RequestException as e:
+            return f"Error en la solicitud: {str(traceback.print_exc())}"
         except Exception as e:
-            error_msg = f"Error interno: {str(e)}"
-            print(traceback.format_exc())
-            yield sse_status(error_msg, done=True)
+            return f"Error interno: {str(traceback.print_exc())}"
