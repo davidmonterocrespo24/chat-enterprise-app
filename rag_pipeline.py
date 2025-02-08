@@ -1,9 +1,10 @@
-from typing import List, Optional, AsyncGenerator
+from typing import List, Union, Generator, Iterator
 from pydantic import BaseModel
+import requests
 import os
 import json
+import uuid
 import traceback
-import httpx
 import asyncio
 
 class Pipeline:
@@ -29,9 +30,19 @@ class Pipeline:
 
     async def on_startup(self):
         print(f"{self.name} iniciado")
+        if self.__event_emitter__:
+            await self.__event_emitter__({
+                "type": "status",
+                "data": {"description": "Pipeline iniciado correctamente", "done": True}
+            })
 
     async def on_shutdown(self):
         print(f"{self.name} detenido")
+        if self.__event_emitter__:
+            await self.__event_emitter__({
+                "type": "status",
+                "data": {"description": "Pipeline detenido correctamente", "done": True}
+            })
 
     async def pipe(
         self,
@@ -39,115 +50,121 @@ class Pipeline:
         model_id: str,
         messages: List[dict],
         body: dict,
-        __event_emitter__: Optional[callable] = None,
-    ) -> AsyncGenerator[str, None]:
-        """
-        Conecta al servicio externo y notifica al usuario los pasos a través del event emitter.
-
-        Parámetros:
-          - user_message: mensaje enviado por el usuario.
-          - model_id: identificador del modelo a utilizar.
-          - messages: historial de mensajes.
-          - body: diccionario con información adicional (por ejemplo, chat_history_id).
-          - __event_emitter__: función asíncrona que, al ser llamada, enviará una notificación de estado.
+        __event_emitter__=None
+    ) -> Union[str, Generator, Iterator]:
         
-        La función realiza lo siguiente:
-          1. Notifica el inicio de la conexión.
-          2. Prepara los datos y envía la solicitud al servicio externo.
-          3. Notifica cuando se ha enviado la solicitud y cuando se recibe la respuesta.
-          4. Va transmitiendo (streaming) la respuesta recibida.
-          5. Notifica la finalización del proceso.
-        """
-        # Información de depuración
-        print(f"user_message: {user_message}")
-        print(f"model_id: {model_id}")
-        print(f"messages: {messages}")
-        print(f"body: {body}")
+        self.__event_emitter__ = __event_emitter__
         
-        # 1. Notificar inicio de conexión
-        if __event_emitter__:
-            await __event_emitter__({
-                "type": "status",
-                "data": {"description": "Iniciando conexión al servicio externo...", "done": False}
-            })
-
-        headers = {
-            "accept": "application/json",
-            "authorization": f"Bearer {self.valves.API_TOKEN}",
-        }
-
-        # Preparar el mensaje y la configuración
-        chat_message = {
-            "message": user_message,
-            "sender": "user",
-            "id": 0
-        }
-
-        configuration = {
-            "model": model_id or self.valves.DEFAULT_MODEL,
-            "internet_access": True,
-            "document_access": True
-        }
-
-        form_data = {
-            'chat_message': json.dumps(chat_message),
-            'chat_history_id': str(body.get("chat_history_id", 0)),
-            'chat_history_message': json.dumps([]),
-            'configuration': json.dumps(configuration)
-        }
-
         try:
-            # 2. Notificar envío de la solicitud
+            # Notificar inicio de proceso
             if __event_emitter__:
                 await __event_emitter__({
                     "type": "status",
-                    "data": {"description": "Enviando solicitud al servicio externo...", "done": False}
+                    "data": {"description": "Iniciando procesamiento de mensaje...", "done": False}
                 })
-
-            # Se utiliza httpx.AsyncClient para realizar la solicitud de forma asíncrona
-            async with httpx.AsyncClient(timeout=None) as client:
-                response = await client.post(
-                    f"{self.valves.API_URL}/chat_history/ask_question2/",
-                    files={key: (None, value) for key, value in form_data.items()},
-                    headers=headers,
-                )
-                response.raise_for_status()
-
-                # 3. Notificar recepción de la respuesta
-                if __event_emitter__:
-                    await __event_emitter__({
-                        "type": "status",
-                        "data": {"description": "Respuesta recibida. Procesando datos...", "done": False}
-                    })
-
-                # 4. Transmitir en streaming la respuesta recibida
-                async for chunk in response.aiter_text():
-                    if chunk:
-                        yield chunk
-
-            # 5. Notificar que el proceso ha finalizado correctamente
+            
+            print(f"user_message: {user_message}")
+            print(f"model_id: {model_id}")
+            print(f"messages: {messages}")
+            print(f"body: {body}")
+            
+            # Notificar preparación de headers
             if __event_emitter__:
                 await __event_emitter__({
                     "type": "status",
-                    "data": {"description": "Proceso completado", "done": True}
+                    "data": {"description": "Preparando headers de la solicitud...", "done": False}
                 })
 
-        except httpx.RequestError as e:
-            error_msg = f"Error en la solicitud: {str(e)}"
-            print(traceback.format_exc())
+            headers = {
+                "accept": "application/json",
+                "authorization": f"Bearer {self.valves.API_TOKEN}",
+            }
+
+            # Notificar preparación del mensaje
+            if __event_emitter__:
+                await __event_emitter__({
+                    "type": "status",
+                    "data": {"description": "Preparando mensaje para el modelo...", "done": False}
+                })
+
+            chat_message = {
+                "message": user_message,
+                "sender": "user",
+                "id": 0
+            }
+
+            configuration = {
+                "model": model_id or self.valves.DEFAULT_MODEL,
+                "internet_access": True,
+                "document_access": True
+            }
+
+            # Notificar preparación del form data
+            if __event_emitter__:
+                await __event_emitter__({
+                    "type": "status",
+                    "data": {"description": "Preparando datos del formulario...", "done": False}
+                })
+
+            form_data = {
+                'chat_message': json.dumps(chat_message),
+                'chat_history_id': str(body.get("chat_history_id", 0)),
+                'chat_history_message': json.dumps([]),
+                'configuration': json.dumps(configuration)
+            }
+
+            # Notificar inicio de la solicitud
+            if __event_emitter__:
+                await __event_emitter__({
+                    "type": "status",
+                    "data": {"description": "Enviando solicitud al servicio...", "done": False}
+                })
+
+            response = requests.post(
+                f"{self.valves.API_URL}/chat_history/ask_question2/",
+                files={key: (None, value) for key, value in form_data.items()},
+                headers=headers,
+                stream=True
+            )
+            response.raise_for_status()
+            
+            # Notificar inicio de procesamiento de respuesta
+            if __event_emitter__:
+                await __event_emitter__({
+                    "type": "status",
+                    "data": {"description": "Procesando respuesta del modelo...", "done": False}
+                })
+
+            for chunk in response.iter_content(chunk_size=None):
+                if chunk:
+                    # Notificar cada chunk recibido
+                    if __event_emitter__:
+                        await __event_emitter__({
+                            "type": "status",
+                            "data": {"description": "Recibiendo respuesta...", "done": False}
+                        })
+                    yield chunk.decode('utf-8')
+            
+            # Notificar finalización exitosa
+            if __event_emitter__:
+                await __event_emitter__({
+                    "type": "status",
+                    "data": {"description": "Procesamiento completado con éxito", "done": True}
+                })
+                
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Error en la solicitud: {str(traceback.print_exc())}"
             if __event_emitter__:
                 await __event_emitter__({
                     "type": "status",
                     "data": {"description": error_msg, "done": True}
                 })
-            yield error_msg
-
+            return error_msg
         except Exception as e:
-            error_msg = f"Error interno: {str(e)}"
-            print(traceback.format_exc())
+            error_msg = f"Error interno: {str(traceback.print_exc())}"
             if __event_emitter__:
                 await __event_emitter__({
                     "type": "status",
                     "data": {"description": error_msg, "done": True}
                 })
-            yield error_msg
+            return error_msg
