@@ -29,22 +29,22 @@ class Pipeline:
         )
         
     async def on_startup(self):
+        await self.send_status_update("🚀 Iniciando pipeline...", done=False)
         print(f"{self.name} iniciado")
         
     async def on_shutdown(self):
+        await self.send_status_update("🔄 Deteniendo pipeline...", done=False)
         print(f"{self.name} detenido")
         
-    async def set_status(self, description: str, __event_emitter__: Optional[Callable[[Any], Awaitable[None]]] = None):
+    async def send_status_update(self, description: str, done: bool = False, __event_emitter__: Optional[Callable[[Any], Awaitable[None]]] = None):
+        """Método unificado para enviar actualizaciones de estado"""
         if __event_emitter__:
-            await __event_emitter__({"type": "status", "data": {"description": description, "done": False}})
+            await __event_emitter__({"type": "status", "data": {"description": description, "done": done}})
 
-    async def send_data(self, data: str, role: str = "assistant", __event_emitter__: Optional[Callable[[Any], Awaitable[None]]] = None):
+    async def send_message(self, content: str, role: str = "assistant", __event_emitter__: Optional[Callable[[Any], Awaitable[None]]] = None):
+        """Método unificado para enviar mensajes"""
         if __event_emitter__:
-            await __event_emitter__({"type": "message", "data": {"content": data, "role": role}})
-            
-    async def set_status_end(self, data: str, __event_emitter__: Optional[Callable[[Any], Awaitable[None]]] = None):
-        if __event_emitter__:
-            await __event_emitter__({"type": "status", "data": {"description": data, "done": True}})
+            await __event_emitter__({"type": "message", "data": {"content": content, "role": role}})
 
     async def pipe(
         self,
@@ -55,34 +55,37 @@ class Pipeline:
         __task__=None,
     ) -> str:
         try:
-            # Extract necessary information
+            # Notificar inicio del proceso
+            await self.send_status_update("🔍 Iniciando procesamiento de la solicitud...", False, __event_emitter__)
+            
+            # Extraer información necesaria
             user_message = body.get("messages", [{}])[-1].get("content", "")
             model_id = body.get("model", self.valves.DEFAULT_MODEL)
             
-            # Notify start of processing
-            await self.set_status("Initializing pipeline...", __event_emitter__)
+            # Notificar preparación de la solicitud
+            await self.send_status_update("📝 Preparando la solicitud para el modelo...", False, __event_emitter__)
             
-            # Prepare headers and message
+            # Preparar headers
             headers = {
                 "accept": "application/json",
                 "authorization": f"Bearer {self.valves.API_TOKEN}",
             }
             
-            # Notify message preparation
-            await self.set_status("Preparing message for processing...", __event_emitter__)
-            
+            # Construir el mensaje del chat
             chat_message = {
                 "message": user_message,
                 "sender": "user",
                 "id": 0
             }
             
+            # Configurar parámetros
             configuration = {
                 "model": model_id,
                 "internet_access": True,
                 "document_access": True
             }
             
+            # Preparar form data
             form_data = {
                 'chat_message': json.dumps(chat_message),
                 'chat_history_id': str(body.get("chat_history_id", 0)),
@@ -90,39 +93,54 @@ class Pipeline:
                 'configuration': json.dumps(configuration)
             }
             
-            # Notify API request start
-            await self.set_status("Sending request to API...", __event_emitter__)
+            # Notificar envío de la solicitud
+            await self.send_status_update("🌐 Conectando con el servicio externo...", False, __event_emitter__)
             
-            response = requests.post(
-                f"{self.valves.API_URL}/chat_history/ask_question2/",
-                files={key: (None, value) for key, value in form_data.items()},
-                headers=headers,
-                stream=True
-            )
-            response.raise_for_status()
+            try:
+                response = requests.post(
+                    f"{self.valves.API_URL}/chat_history/ask_question2/",
+                    files={key: (None, value) for key, value in form_data.items()},
+                    headers=headers,
+                    stream=True
+                )
+                response.raise_for_status()
+                
+                # Notificar inicio del streaming
+                await self.send_status_update("📨 Recibiendo respuesta del modelo...", False, __event_emitter__)
+                
+                accumulated_response = ""
+                for chunk in response.iter_content(chunk_size=None):
+                    if chunk:
+                        chunk_text = chunk.decode('utf-8')
+                        accumulated_response += chunk_text
+                        # Enviar chunk al usuario
+                        await self.send_message(chunk_text, "assistant", __event_emitter__)
+                
+                # Notificar éxito
+                await self.send_status_update(
+                    f"✅ Proceso completado - {len(accumulated_response)} caracteres procesados", 
+                    True, 
+                    __event_emitter__
+                )
+                
+            except requests.exceptions.ConnectionError:
+                error_msg = "❌ Error de conexión: No se pudo conectar al servicio externo"
+                await self.send_status_update(error_msg, True, __event_emitter__)
+                return error_msg
             
-            # Notify streaming start
-            await self.set_status("Processing response stream...", __event_emitter__)
+            except requests.exceptions.Timeout:
+                error_msg = "⏰ Tiempo de espera agotado: El servicio está tardando demasiado en responder"
+                await self.send_status_update(error_msg, True, __event_emitter__)
+                return error_msg
             
-            accumulated_response = ""
-            for chunk in response.iter_content(chunk_size=None):
-                if chunk:
-                    chunk_text = chunk.decode('utf-8')
-                    accumulated_response += chunk_text
-                    # Send chunk to user
-                    await self.send_data(chunk_text, "assistant", __event_emitter__)
-            
-            # Notify completion
-            await self.set_status_end(f"Pipeline completed successfully - Processed {len(accumulated_response)} characters", __event_emitter__)
+            except requests.exceptions.RequestException as e:
+                error_msg = f"🔥 Error en la solicitud API: {str(e)}"
+                await self.send_status_update(error_msg, True, __event_emitter__)
+                return error_msg
             
             return ""
             
-        except requests.exceptions.RequestException as e:
-            error_msg = f"API Request Error: {str(e)}"
-            await self.set_status_end(error_msg, __event_emitter__)
-            return error_msg
-            
         except Exception as e:
-            error_msg = f"Internal Error: {str(e)}\n{traceback.format_exc()}"
-            await self.set_status_end(error_msg, __event_emitter__)
+            error_msg = f"💥 Error interno: {str(e)}\n{traceback.format_exc()}"
+            await self.send_status_update(error_msg, True, __event_emitter__)
             return error_msg
