@@ -46,13 +46,7 @@ class Pipeline:
         print(f"model_id: {model_id}")
         print(f"messages: {messages}")
         print(f"body: {body}")
-
-        # Mostrar notificación de "pensando" antes de llamar a la API
-        yield "<think>Pensando... Por favor, espera 2 segundos mientras procesamos tu solicitud.</think>"
-        time.sleep(2)  # Pausa de 2 segundos
-
-        # Aquí podrías tener la lógica de la función
-        result = f"Processing message '{user_message}' with model '{model_id}'"
+        
         headers = {
             "accept": "application/json",
             "authorization": f"Bearer {self.valves.API_TOKEN}",
